@@ -456,6 +456,9 @@ static void print_cf_instruction(const CfInstruction *ins, int indent)
     case CF_PTR_MEMSET_TO_ZERO:
         printf("set value of pointer %s to zero bytes", varname(ins->operands[0]));
         break;
+    case CF_ARRAY_TO_PTR:
+        printf("array to pointer %s", varname(ins->operands[0]));
+        break;
     case CF_VARCPY:
         printf("%s", varname(ins->operands[0]));
         break;

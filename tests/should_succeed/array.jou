@@ -1,3 +1,5 @@
+declare printf(fmt: byte*, ...) -> int
+
 # c can't do this
 def make_array() -> int[3]:
     #return [4, 5, 6]
