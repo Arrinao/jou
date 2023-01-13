@@ -12,7 +12,7 @@ struct State {
 };
 
 // If error_location is NULL, this will return NULL when variable is not found.
-static const CfVariable *find_variable(const struct State *st, const char *name, const Location *error_location)
+static CfVariable *find_variable(const struct State *st, const char *name, const Location *error_location)
 {
     for (CfVariable **var = st->cfg->variables.ptr; var < End(st->cfg->variables); var++)
         if (!strcmp((*var)->name, name))
@@ -101,40 +101,67 @@ static CfInstruction *add_instruction(
     add_instruction((st), (loc), CF_CONSTANT, &(union CfInstructionData){ .constant=copy_constant(&(c)) }, NULL, (target))
 
 
+int evaluate_array_length(const AstExpression *expr)
+{
+    switch(expr->kind) {
+    case AST_EXPR_CONSTANT:
+        if (expr->data.constant.kind == CONSTANT_INTEGER
+            && expr->data.constant.data.integer.is_signed
+            && expr->data.constant.data.integer.width_in_bits == 32)
+        {
+            return (int)expr->data.constant.data.integer.value;
+        }
+        // fall through
+    default:
+        fail_with_error(expr->location, "cannot evaluate array length at compile time");
+    }
+}
+
 // NULL return value means it is void
 static Type *build_type_or_void(const struct State *st, const AstType *asttype)
 {
-    (void)st;    // Currently not used. Will later be needed for struct names
+    Type t, *tmp;
 
-    int npointers = asttype->npointers;
-    Type t;
-
-    if (!strcmp(asttype->name, "int"))
-        t = intType;
-    else if (!strcmp(asttype->name, "byte"))
-        t = byteType;
-    else if (!strcmp(asttype->name, "bool"))
-        t = boolType;
-    else if (!strcmp(asttype->name, "void")) {
-        if (npointers == 0)
+    switch(asttype->kind) {
+    case AST_TYPE_NAMED:
+        if (!strcmp(asttype->data.name, "int"))
+            t = intType;
+        else if (!strcmp(asttype->data.name, "byte"))
+            t = byteType;
+        else if (!strcmp(asttype->data.name, "bool"))
+            t = boolType;
+        else if (!strcmp(asttype->data.name, "void"))
             return NULL;
-        npointers--;
-        t = voidPtrType;
-    } else {
-        bool found = false;
-        for (struct Type *ptr = st->structs.ptr; ptr < End(st->structs); ptr++) {
-            if (!strcmp(ptr->name, asttype->name)) {
-                t = copy_type(ptr);
-                found = true;
-                break;
+        else {
+            bool found = false;
+            for (struct Type *ptr = st->structs.ptr; ptr < End(st->structs); ptr++) {
+                if (!strcmp(ptr->name, asttype->data.name)) {
+                    t = copy_type(ptr);
+                    found = true;
+                    break;
+                }
             }
+            if(!found)
+                fail_with_error(asttype->location, "there is no type named '%s'", asttype->data.name);
         }
-        if(!found)
-            fail_with_error(asttype->location, "there is no type named '%s'", asttype->name);
-    }
+        break;
 
-    while (npointers--)
-        t = create_pointer_type(&t, asttype->location);
+    case AST_TYPE_POINTER:
+        tmp = build_type_or_void(st, asttype->data.valuetype);
+        if (tmp)
+            t = create_pointer_type(tmp, asttype->location);
+        else
+            t = voidPtrType;
+        break;
+
+    case AST_TYPE_ARRAY:
+        tmp = build_type_or_void(st, asttype->data.valuetype);
+        if (!tmp)
+            // TODO: test this error
+            fail_with_error(asttype->location, "cannot make array of void");
+        t = create_array_type(tmp, evaluate_array_length(asttype->data.array.len), asttype->location);
+        break;
+    }
 
     Type *ptr = malloc(sizeof *ptr);
     *ptr = t;
@@ -366,12 +393,11 @@ static const CfVariable *build_struct_field_pointer(
     for (int i = 0; i < structtype->data.structfields.count; i++) {
         char name[100];
         safe_strcpy(name, structtype->data.structfields.names[i]);
-        const Type *type = &structtype->data.structfields.types[i];
+        Type *type = &structtype->data.structfields.types[i];
 
         if (!strcmp(name, fieldname)) {
             const Type ptrtype = create_pointer_type(type, location);
             CfVariable* result = add_variable(st, &ptrtype, NULL);
-            free(ptrtype.data.valuetype);
 
             union CfInstructionData dat;
             safe_strcpy(dat.fieldname, name);
@@ -662,10 +688,9 @@ static const CfVariable *build_address_of_expression(struct State *st, const Ast
     switch(address_of_what->kind) {
     case AST_EXPR_GET_VARIABLE:
     {
-        const CfVariable *var = find_variable(st, address_of_what->data.varname, &address_of_what->location);
+        CfVariable *var = find_variable(st, address_of_what->data.varname, &address_of_what->location);
         Type t = create_pointer_type(&var->type, (Location){0});
         const CfVariable *addr = add_variable(st, &t, NULL);
-        free(t.data.valuetype);
         add_unary_op(st, address_of_what->location, CF_ADDRESS_OF_VARIABLE, var, addr);
         return addr;
     }
@@ -793,8 +818,8 @@ static const CfVariable *build_function_call(struct State *st, const AstCall *ca
 
 static const CfVariable *build_struct_init(struct State *st, const AstCall *call, Location location)
 {
-    struct AstType tmp = { .location = location, .npointers = 0 };
-    safe_strcpy(tmp.name, call->calledname);
+    struct AstType tmp = { .location = location, .kind = AST_TYPE_NAMED };
+    safe_strcpy(tmp.data.name, call->calledname);
     Type t = build_type(st, &tmp);
 
     if (t.kind != TYPE_STRUCT) {
@@ -808,7 +833,6 @@ static const CfVariable *build_struct_init(struct State *st, const AstCall *call
     const CfVariable *instance = add_variable(st, &t, NULL);
     Type p = create_pointer_type(&t, location);
     const CfVariable *instanceptr = add_variable(st, &p, NULL);
-    free(p.data.valuetype);
     free_type(&t);
 
     add_unary_op(st, location, CF_ADDRESS_OF_VARIABLE, instance, instanceptr);

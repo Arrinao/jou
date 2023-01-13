@@ -92,18 +92,23 @@ struct Constant {
 
 
 /*
-There is AstType and Type. The distinction is that AstType only contains
-the name of the type (e.g. "int"), whereas Type contains more
-information (e.g. 32-bit signed integer) that is figured out separately
-after the code has been parsed. This is important for structs.
+There is AstType and Type. The distinction is that Type contains more
+information, e.g. AstType could just contain the name "int" while the
+Type knows that it is a 32-bit signed integer. This is important for
+e.g. structs: we only know the name of a struct when parsing, but we
+will eventually need to know a lot more.
 
 AstType can also represent "void" even though that is not a valid type.
-It simply appears as a type with name "void".
+It simply appears as a named type with name "void".
 */
 struct AstType {
+    enum AstTypeKind { AST_TYPE_NAMED, AST_TYPE_POINTER, AST_TYPE_ARRAY } kind;
     Location location;
-    char name[100];
-    int npointers;  // example: 2 means foo**
+    union {
+        char name[100];  // AST_TYPE_NAMED;
+        AstType *valuetype;  // AST_TYPE_POINTER
+        struct { AstType *membertype; AstExpression *len; } array;  // AST_TYPE_ARRAY
+    } data;
 };
 
 struct AstSignature {
@@ -272,11 +277,13 @@ struct Type {
         TYPE_BOOL,
         TYPE_POINTER,
         TYPE_VOID_POINTER,
+        TYPE_ARRAY,
         TYPE_STRUCT,
     } kind;
     union {
         int width_in_bits;  // TYPE_SIGNED_INTEGER, TYPE_UNSIGNED_INTEGER
         Type *valuetype;  // TYPE_POINTER
+        struct { Type *membertype; int len; } array;
         struct { int count; char (*names)[100]; Type *types; } structfields;  // TYPE_STRUCT
     } data;
 };
@@ -290,10 +297,11 @@ extern const Type byteType;      // byte (8-bit unsigned)
 extern const Type stringType;    // byte*
 extern const Type voidPtrType;   // void*
 
-// create_pointer_type(...) returns a type whose .data.valuetype must be free()d
+// create_pointer_type() and create_array_type() expected a malloc()ed pointer
 // copy_type() is a recursive/deep copy and should be used together with free_type()
-Type create_pointer_type(const Type *elem_type, Location error_location);
 Type create_integer_type(int size_in_bits, bool is_signed);
+Type create_pointer_type(Type *elemtype, Location error_location);
+Type create_array_type(Type *membertype, int len, Location error_location);
 Type copy_type(const Type *t);
 bool is_integer_type(const Type *t);  // includes signed and unsigned
 bool is_pointer_type(const Type *t);  // includes void pointers

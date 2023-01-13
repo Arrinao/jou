@@ -31,6 +31,10 @@ static LLVMTypeRef codegen_type(const Type *type)
             free(elems);
             return result;
         }
+        break;
+    case TYPE_ARRAY:
+        assert(0);
+        break;
     }
     assert(0);
 }

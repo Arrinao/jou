@@ -10,19 +10,6 @@ const Type byteType = { .name = "byte", .kind = TYPE_UNSIGNED_INTEGER, .data.wid
 const Type stringType = { .name = "byte*", .kind = TYPE_POINTER, .data.valuetype = (Type *)&byteType };
 const Type voidPtrType = { .name = "void*", .kind = TYPE_VOID_POINTER };
 
-Type create_pointer_type(const Type *elem_type, Location error_location)
-{
-    Type *dup = malloc(sizeof(*dup));
-    *dup = *elem_type;
-    Type result = { .kind=TYPE_POINTER, .data.valuetype=dup };
-
-    if (strlen(elem_type->name) + 1 >= sizeof result.name)
-        fail_with_error(error_location, "type name too long");
-    sprintf(result.name, "%s*", elem_type->name);
-
-    return result;
-}
-
 Type create_integer_type(int size_in_bits, bool is_signed)
 {
     Type t = { .kind = is_signed?TYPE_SIGNED_INTEGER:TYPE_UNSIGNED_INTEGER, .data.width_in_bits=size_in_bits };
@@ -33,6 +20,33 @@ Type create_integer_type(int size_in_bits, bool is_signed)
     else
         sprintf(t.name, "<%d-bit %s integer>", size_in_bits, is_signed?"signed":"unsigned");
     return t;
+}
+
+Type create_pointer_type(Type *elemtype, Location error_location)
+{
+    Type result = { .kind=TYPE_POINTER, .data.valuetype=elemtype };
+
+    if (strlen(elemtype->name) + 1 >= sizeof result.name)
+        fail_with_error(error_location, "type name too long");
+    sprintf(result.name, "%s*", elemtype->name);
+
+    return result;
+}
+
+Type create_array_type(Type *membertype, int len, Location error_location)
+{
+    if (len <= 0)  // TODO: test this error
+        fail_with_error(error_location, "array length must be positive");
+
+    Type result = { .kind=TYPE_ARRAY, .data.array={.membertype=membertype, .len=len} };
+
+    char tmp[sizeof result.name + 123];
+    snprintf(tmp, sizeof tmp, "%s[%d]", membertype->name, len);
+    if (strlen(tmp) >= sizeof result.name)
+        fail_with_error(error_location, "type name too long");
+    strcpy(result.name, tmp);
+
+    return result;
 }
 
 Type copy_type(const Type *t)
@@ -49,6 +63,11 @@ Type copy_type(const Type *t)
     case TYPE_POINTER:
         t2.data.valuetype = malloc(sizeof(*t2.data.valuetype));
         *t2.data.valuetype = copy_type(t->data.valuetype);
+        break;
+
+    case TYPE_ARRAY:
+        t2.data.array.membertype = malloc(sizeof(*t2.data.array.membertype));
+        *t2.data.array.membertype = copy_type(t->data.array.membertype);
         break;
 
     case TYPE_STRUCT:
@@ -101,6 +120,11 @@ bool same_type(const Type *a, const Type *b)
                 return false;
             }
         return true;
+    case TYPE_ARRAY:
+        return (
+            a->data.array.len == b->data.array.len
+            && same_type(a->data.array.membertype, b->data.array.membertype)
+        );
     }
 
     assert(0);
